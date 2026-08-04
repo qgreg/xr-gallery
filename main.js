@@ -133,13 +133,47 @@ for (let i = 0; i < 2; i++) {
     ray.scale.z = 5;
     ray.visible = false;
     controller.add(ray);
-    controller.addEventListener('connected', () => { ray.visible = true; });
-    controller.addEventListener('disconnected', () => { ray.visible = false; });
+    controller.addEventListener('connected', (event) => {
+        ray.visible = true;
+        const data = event.data || {};
+        const axisCount = data.gamepad ? data.gamepad.axes.length : 'no gamepad';
+        console.log(`ctrl ${i}: ${data.handedness || '?'}, axes=${axisCount}`);
+    });
+    controller.addEventListener('disconnected', () => {
+        ray.visible = false;
+        console.log(`ctrl ${i}: disconnected`);
+    });
     dolly.add(controller);
 
     const grip = renderer.xr.getControllerGrip(i);
     grip.add(controllerModelFactory.createControllerModel(grip));
     dolly.add(grip);
+}
+
+// --- Eye Height ---
+// With a floor-relative reference space, your physical head height becomes your
+// virtual eye height — so playing seated puts your eyes at the avatar's waist.
+// Measure the head once per session and offset the dolly to land at a standing
+// eye height regardless of how the player is actually sitting.
+const targetEyeHeight = parseFloat(new URLSearchParams(window.location.search).get('eye')) || 1.6;
+let heightOffset = 0;
+let heightCalibrated = false;
+
+renderer.xr.addEventListener('sessionstart', () => {
+    heightCalibrated = false;
+    lastInputSignature = '';
+});
+
+function calibrateEyeHeight() {
+    const xrCamera = renderer.xr.getCamera(camera);
+    const headWorld = new THREE.Vector3();
+    xrCamera.getWorldPosition(headWorld);
+    // Dolly is unrotated-scale at the scene root, so this is the raw pose height.
+    const poseHeight = headWorld.y - dolly.position.y;
+    if (poseHeight <= 0.1) return; // pose not resolved yet
+    heightOffset = targetEyeHeight - poseHeight;
+    heightCalibrated = true;
+    console.log(`eye height: pose=${poseHeight.toFixed(2)} offset=${heightOffset.toFixed(2)}`);
 }
 
 // --- Lighting ---
@@ -416,6 +450,25 @@ function showLoadError(msg) {
     console.error(msg);
     const info = document.getElementById('info');
     if (info) info.innerHTML = `<p>Could not load the avatar.</p><p>${msg}</p>`;
+    useFallbackAvatar();
+}
+
+// Without an avatar, updateAvatar bails on its first line and nothing works:
+// no locomotion, no camera follow, no dolly. A plain capsule stand-in keeps the
+// whole control scheme alive when the model host is unreachable.
+function useFallbackAvatar() {
+    if (avatar) return;
+    const capsule = new THREE.Mesh(
+        new THREE.CapsuleGeometry(0.3, 1.1, 8, 16),
+        new THREE.MeshStandardMaterial({ color: 0x8899aa, roughness: 0.7 })
+    );
+    capsule.position.y = 0.85;
+    capsule.castShadow = true;
+    capsule.receiveShadow = true;
+    avatar = new THREE.Group();
+    avatar.add(capsule);
+    scene.add(avatar);
+    console.log('Using fallback avatar');
 }
 
 loader.load(avatarUrl, (gltf) => {
@@ -534,6 +587,7 @@ const SNAP_TURN_ANGLE = Math.PI / 6;
 const SNAP_TURN_THRESHOLD = 0.7;
 const SNAP_TURN_RELEASE = 0.3;
 let snapTurnArmed = true;
+let lastInputSignature = '';
 
 function updateAvatar(dt) {
     if (!avatar) return;
@@ -551,6 +605,15 @@ function updateAvatar(dt) {
 
     const session = renderer.xr.getSession();
     if (session) {
+        // Log whenever the set of live inputs changes, so a controller that
+        // never connects or silently drops shows up in the debug panel.
+        const signature = Array.from(session.inputSources)
+            .map(s => `${s.handedness}${s.gamepad ? '+pad' : '/NOPAD'}`).join(' ');
+        if (signature !== lastInputSignature) {
+            lastInputSignature = signature;
+            console.log('xr inputs: ' + (signature || 'none'));
+        }
+
         let snapInput = 0;
         for (const source of session.inputSources) {
             if (!source.gamepad) continue;
@@ -600,6 +663,8 @@ function updateAvatar(dt) {
         // facing +Z needs a half turn to point the view the same way it walks.
         dolly.position.copy(avatar.position);
         dolly.rotation.y = avatar.rotation.y + (avatarForwardZ > 0 ? Math.PI : 0);
+        if (!heightCalibrated) calibrateEyeHeight();
+        dolly.position.y = avatar.position.y + heightOffset;
     } else {
         // Desktop follow cam: sit behind the avatar's back and above it, so the
         // camera swings around as the avatar turns instead of staring it down.
