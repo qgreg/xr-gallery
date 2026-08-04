@@ -16,9 +16,14 @@ scene.add(dolly);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
+// Cap the pixel ratio: phones report 3x, which triples the fragment cost on
+// exactly the hardware least able to absorb it.
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.xr.enabled = true;
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
@@ -110,17 +115,38 @@ renderer.xr.addEventListener('sessionend', () => {
 });
 
 // --- Lighting ---
-const ambientLight = new THREE.AmbientLight(0x404040, 2);
+const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
 scene.add(ambientLight);
+
+// Cool light down from the ceiling, warm bounce up off the floor. Cheap stand-in
+// for the indirect light a real interior would have.
+const bounceLight = new THREE.HemisphereLight(0xbcd8f5, 0x8a6b4f, 0.6);
+scene.add(bounceLight);
 
 const lampLight = new THREE.PointLight(0xffaa55, 10, 10);
 lampLight.position.set(1.2, 1.5, -1.2);
 lampLight.castShadow = true;
+lampLight.shadow.mapSize.set(1024, 1024);
+lampLight.shadow.bias = -0.0015;
+lampLight.shadow.camera.near = 0.1;
+lampLight.shadow.camera.far = 12;
 scene.add(lampLight);
 
 // Angled so it reads as sun coming through the west window.
 const windowLight = new THREE.DirectionalLight(0xaaccff, 1.4);
 windowLight.position.set(-8, 3.5, 1.5);
+windowLight.castShadow = true;
+windowLight.shadow.mapSize.set(2048, 2048);
+windowLight.shadow.bias = -0.0008;
+// Frame the shadow camera on the room; a directional light's default frustum is
+// far too small to cover it, and oversizing it just wastes depth resolution.
+const shadowExtent = 8;
+windowLight.shadow.camera.left = -shadowExtent;
+windowLight.shadow.camera.right = shadowExtent;
+windowLight.shadow.camera.top = shadowExtent;
+windowLight.shadow.camera.bottom = -shadowExtent;
+windowLight.shadow.camera.near = 0.5;
+windowLight.shadow.camera.far = 30;
 scene.add(windowLight);
 
 // --- Cozy Room Content ---
@@ -322,6 +348,17 @@ const plant = new THREE.Mesh(plantGeo, plantMat);
 plant.position.set(0, 0.95, 0);
 tableGroup.add(plant);
 
+// --- Shadows ---
+// Every mesh in the room receives. Furniture also casts; the shell itself does
+// not, because single-sided planes casting onto themselves produce acne, and
+// the sky panel is unlit by design.
+const shellMeshes = new Set([northWall, southWall, eastWall, westWall, floor, ceiling, skyPanel]);
+roomGroup.traverse(obj => {
+    if (!obj.isMesh) return;
+    obj.receiveShadow = obj !== skyPanel;
+    obj.castShadow = !shellMeshes.has(obj);
+});
+
 // --- Avatar Loading ---
 // Ready Player Me shut down, so the avatar now comes from a three.js example
 // asset that ships its own Idle/Walk clips. One file means one fetch and no
@@ -438,7 +475,11 @@ if (joystickZone) {
         joystickVector.y = 0;
         joystickKnob.style.transform = `translate(-50%, -50%)`;
     };
+    // touchcancel matters as much as touchend: a system gesture or an incoming
+    // call ends the touch without firing touchend, which would otherwise leave
+    // the stick deflected and the avatar walking with no way to stop it.
     joystickZone.addEventListener('touchend', endJoystick);
+    joystickZone.addEventListener('touchcancel', endJoystick);
 }
 
 function updateAvatar(dt) {
