@@ -220,10 +220,10 @@ let idleAction, walkAction;
 const avatarSpeed = 2.0;
 const avatarTurnSpeed = 2.0;
 
-// Which way the model's front points along its local Z. Flip to -1 if the
-// avatar walks backwards / the camera ends up facing it: this one constant
-// drives locomotion, the follow-cam, and the VR dolly yaw together.
-const avatarForwardZ = 1;
+// Which way the model's front points along its local Z. Soldier.glb faces -Z,
+// confirmed visually. This one constant drives locomotion, the follow-cam, and
+// the VR dolly yaw together.
+const avatarForwardZ = -1;
 
 // Desktop follow-cam placement, plus scratch vectors reused each frame.
 const followDistance = 4;
