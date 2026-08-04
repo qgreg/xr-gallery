@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 // --- Initialization ---
 const scene = new THREE.Scene();
@@ -113,6 +114,33 @@ renderer.xr.addEventListener('sessionend', () => {
     dolly.position.set(0, 0, 0);
     dolly.rotation.set(0, 0, 0);
 });
+
+// --- XR Controllers ---
+// Parented to the dolly, not the scene. The dolly is the play-space origin and
+// it travels with the avatar, so scene-parented controllers would slide out of
+// the player's hands the moment they walked anywhere.
+const controllerModelFactory = new XRControllerModelFactory();
+const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -1)
+]);
+
+for (let i = 0; i < 2; i++) {
+    const controller = renderer.xr.getController(i);
+    const ray = new THREE.Line(rayGeometry, new THREE.LineBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0.6
+    }));
+    ray.scale.z = 5;
+    ray.visible = false;
+    controller.add(ray);
+    controller.addEventListener('connected', () => { ray.visible = true; });
+    controller.addEventListener('disconnected', () => { ray.visible = false; });
+    dolly.add(controller);
+
+    const grip = renderer.xr.getControllerGrip(i);
+    grip.add(controllerModelFactory.createControllerModel(grip));
+    dolly.add(grip);
+}
 
 // --- Lighting ---
 const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
@@ -482,6 +510,31 @@ if (joystickZone) {
     joystickZone.addEventListener('touchcancel', endJoystick);
 }
 
+// The xr-standard mapping puts the thumbstick on axes 2/3 and the touchpad on
+// 0/1. Simpler profiles only expose 0/1, so fall back on length rather than on
+// a truthiness test — a stick resting at exactly 0 is a valid reading, not a
+// missing one.
+function readThumbstick(gamepad) {
+    const axes = gamepad.axes;
+    if (axes.length >= 4) return { x: axes[2], y: axes[3] };
+    if (axes.length >= 2) return { x: axes[0], y: axes[1] };
+    return { x: 0, y: 0 };
+}
+
+// Rescale past the deadzone so motion eases in from a standstill instead of
+// jumping straight to the deadzone magnitude.
+const STICK_DEADZONE = 0.15;
+function applyDeadzone(value) {
+    const magnitude = Math.abs(value);
+    if (magnitude < STICK_DEADZONE) return 0;
+    return Math.sign(value) * (magnitude - STICK_DEADZONE) / (1 - STICK_DEADZONE);
+}
+
+const SNAP_TURN_ANGLE = Math.PI / 6;
+const SNAP_TURN_THRESHOLD = 0.7;
+const SNAP_TURN_RELEASE = 0.3;
+let snapTurnArmed = true;
+
 function updateAvatar(dt) {
     if (!avatar) return;
 
@@ -498,17 +551,25 @@ function updateAvatar(dt) {
 
     const session = renderer.xr.getSession();
     if (session) {
+        let snapInput = 0;
         for (const source of session.inputSources) {
-            if (source.gamepad) {
-                const axes = source.gamepad.axes;
-                // Standard mapping: 0,1 for thumbstick
-                if (source.handedness === 'left') {
-                    if (Math.abs(axes[3] || axes[1]) > 0.1) moveForward -= (axes[3] || axes[1]);
-                }
-                if (source.handedness === 'right') {
-                    if (Math.abs(axes[2] || axes[0]) > 0.1) turn -= (axes[2] || axes[0]);
-                }
+            if (!source.gamepad) continue;
+            const stick = readThumbstick(source.gamepad);
+            if (source.handedness === 'left') {
+                moveForward -= applyDeadzone(stick.y);
+            } else if (source.handedness === 'right') {
+                snapInput = stick.x;
             }
+        }
+
+        // Snap turn rather than smooth yaw: continuous rotation is one of the
+        // most reliable ways to make people sick in VR. Fire once per
+        // deflection and re-arm only when the stick returns near centre.
+        if (snapTurnArmed && Math.abs(snapInput) > SNAP_TURN_THRESHOLD) {
+            avatar.rotation.y -= Math.sign(snapInput) * SNAP_TURN_ANGLE;
+            snapTurnArmed = false;
+        } else if (Math.abs(snapInput) < SNAP_TURN_RELEASE) {
+            snapTurnArmed = true;
         }
     }
 
