@@ -22,54 +22,92 @@ renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
-// --- VR Debug Console ---
-const debugCanvas = document.createElement('canvas');
-debugCanvas.width = 512;
-debugCanvas.height = 512;
-const debugCtx = debugCanvas.getContext('2d');
-const debugTexture = new THREE.CanvasTexture(debugCanvas);
-const debugMaterial = new THREE.MeshBasicMaterial({ map: debugTexture, transparent: true, opacity: 0.8 });
-const debugPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), debugMaterial);
-debugPlane.position.set(0, 1, -2);
-scene.add(debugPlane);
+// --- VR Debug Console (opt-in via ?debug) ---
+const DEBUG = new URLSearchParams(window.location.search).has('debug');
 
-const logs = [];
-const originalLog = console.log;
-const originalError = console.error;
+let debugPlane = null;
+let updateDebugPanel = () => { };
 
-function updateDebugConsole() {
-    debugCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    debugCtx.fillRect(0, 0, 512, 512);
-    debugCtx.fillStyle = 'white';
-    debugCtx.font = '20px monospace';
-    logs.slice(-20).forEach((msg, i) => {
-        debugCtx.fillText(msg, 10, 30 + i * 24);
+if (DEBUG) {
+    const debugCanvas = document.createElement('canvas');
+    debugCanvas.width = 512;
+    debugCanvas.height = 512;
+    const debugCtx = debugCanvas.getContext('2d');
+    const debugTexture = new THREE.CanvasTexture(debugCanvas);
+    const debugMaterial = new THREE.MeshBasicMaterial({ map: debugTexture, transparent: true, opacity: 0.8 });
+    debugPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), debugMaterial);
+    debugPlane.position.set(0, 1, -2);
+    scene.add(debugPlane);
+
+    const logs = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+
+    function drawDebugConsole() {
+        debugCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        debugCtx.fillRect(0, 0, 512, 512);
+        debugCtx.fillStyle = 'white';
+        debugCtx.font = '20px monospace';
+        logs.slice(-20).forEach((msg, i) => {
+            debugCtx.fillText(msg, 10, 30 + i * 24);
+        });
+        debugTexture.needsUpdate = true;
+    }
+
+    function record(prefix, args) {
+        logs.push(prefix + args.join(' '));
+        if (logs.length > 100) logs.shift();
+        drawDebugConsole();
+    }
+
+    console.log = (...args) => {
+        record('[LOG] ', args);
+        originalLog(...args);
+    };
+
+    console.error = (...args) => {
+        record('[ERR] ', args);
+        originalError(...args);
+    };
+
+    window.addEventListener('error', (e) => {
+        console.error(`Window: ${e.message}`);
     });
-    debugTexture.needsUpdate = true;
+
+    // Keep the panel pinned in front of the headset. This runs every frame,
+    // independent of whether the avatar loaded — the avatar failing to load is
+    // exactly the case the console needs to report.
+    const headPos = new THREE.Vector3();
+    const headDir = new THREE.Vector3();
+    updateDebugPanel = () => {
+        if (!renderer.xr.isPresenting) return;
+        const xrCamera = renderer.xr.getCamera(camera);
+        xrCamera.getWorldPosition(headPos);
+        xrCamera.getWorldDirection(headDir);
+        debugPlane.position.copy(headPos).addScaledVector(headDir, 1.5);
+        debugPlane.lookAt(headPos);
+    };
+
+    console.log("Debug console initialized");
 }
-
-console.log = (...args) => {
-    logs.push('[LOG] ' + args.join(' '));
-    updateDebugConsole();
-    originalLog(...args);
-};
-
-console.error = (...args) => {
-    logs.push('[ERR] ' + args.join(' '));
-    updateDebugConsole();
-    originalError(...args);
-};
-
-window.addEventListener('error', (e) => {
-    console.error(`Window: ${e.message}`);
-});
-
-console.log("Debug console initialized");
 
 // --- Controls ---
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 1, 0);
 controls.update();
+
+// Track manual orbiting so the follow-cam doesn't fight the user mid-drag.
+let userIsOrbiting = false;
+controls.addEventListener('start', () => { userIsOrbiting = true; });
+controls.addEventListener('end', () => { userIsOrbiting = false; });
+
+// The camera is parented to the dolly, so its transform is dolly-local while
+// every desktop follow-cam calculation below is world-space. That only holds
+// while the dolly is at identity, so restore it when the XR session ends.
+renderer.xr.addEventListener('sessionend', () => {
+    dolly.position.set(0, 0, 0);
+    dolly.rotation.set(0, 0, 0);
+});
 
 // --- Lighting ---
 const ambientLight = new THREE.AmbientLight(0x404040, 2);
@@ -180,6 +218,13 @@ let idleAction, walkAction;
 const avatarSpeed = 2.0;
 const avatarTurnSpeed = 2.0;
 
+// Desktop follow-cam placement, plus scratch vectors reused each frame.
+const followDistance = 4;
+const followHeight = 2;
+const followLookHeight = 1;
+const cameraTarget = new THREE.Vector3();
+const lookTarget = new THREE.Vector3();
+
 loader.load(avatarUrl, (gltf) => {
     avatar = gltf.scene;
     avatar.traverse(child => {
@@ -192,17 +237,41 @@ loader.load(avatarUrl, (gltf) => {
     console.log('Avatar loaded');
 
     loader.load(animUrl, (animGltf) => {
+        const clips = animGltf.animations || [];
+        if (clips.length === 0) {
+            console.error('Anim error: no clips in ' + animUrl);
+            return;
+        }
+
         mixer = new THREE.AnimationMixer(avatar);
-        const clips = animGltf.animations;
         const idleClip = clips.find(c => c.name.toLowerCase().includes('idle')) || clips[0];
-        const walkClip = clips.find(c => c.name.toLowerCase().includes('walk')) || clips[1];
+        const walkClip = clips.find(c => c.name.toLowerCase().includes('walk'))
+            || (clips.length > 1 ? clips[1] : null);
 
-        idleAction = mixer.clipAction(idleClip);
-        walkAction = mixer.clipAction(walkClip);
+        if (idleClip) {
+            idleAction = mixer.clipAction(idleClip);
+            idleAction.play();
+            idleAction.setEffectiveWeight(1);
+        }
 
-        idleAction.play();
-        walkAction.play();
-        walkAction.weight = 0;
+        if (walkClip) {
+            walkAction = mixer.clipAction(walkClip);
+            walkAction.play();
+            walkAction.setEffectiveWeight(0);
+        } else {
+            console.error('No walk clip found; available: ' + clips.map(c => c.name).join(', '));
+        }
+
+        // The animation source and the avatar are different rigs, so tracks bind
+        // by node name. If nothing matched, the mixer runs but moves no bones.
+        const bones = new Set();
+        avatar.traverse(o => bones.add(o.name));
+        const bound = (idleClip || walkClip).tracks
+            .some(t => bones.has(t.name.split('.')[0]));
+        if (!bound) {
+            console.error('Animation tracks match no nodes on the avatar rig');
+        }
+
         console.log('Animations loaded');
     }, undefined, (err) => console.error('Anim error:', err));
 }, undefined, (err) => console.error('Avatar error:', err));
@@ -286,14 +355,16 @@ function updateAvatar(dt) {
         }
     }
 
+    // The avatar model faces +Z, matching the glTF convention.
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(avatar.quaternion);
+
     if (moveForward !== 0) {
-        const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(avatar.quaternion);
-        avatar.position.add(forward.multiplyScalar(moveForward * avatarSpeed * dt));
-        if (walkAction) walkAction.weight = THREE.MathUtils.lerp(walkAction.weight, 1, 0.1);
-        if (idleAction) idleAction.weight = THREE.MathUtils.lerp(idleAction.weight, 0, 0.1);
+        avatar.position.addScaledVector(forward, moveForward * avatarSpeed * dt);
+        if (walkAction) walkAction.setEffectiveWeight(THREE.MathUtils.lerp(walkAction.getEffectiveWeight(), 1, 0.1));
+        if (idleAction) idleAction.setEffectiveWeight(THREE.MathUtils.lerp(idleAction.getEffectiveWeight(), 0, 0.1));
     } else {
-        if (walkAction) walkAction.weight = THREE.MathUtils.lerp(walkAction.weight, 0, 0.1);
-        if (idleAction) idleAction.weight = THREE.MathUtils.lerp(idleAction.weight, 1, 0.1);
+        if (walkAction) walkAction.setEffectiveWeight(THREE.MathUtils.lerp(walkAction.getEffectiveWeight(), 0, 0.1));
+        if (idleAction) idleAction.setEffectiveWeight(THREE.MathUtils.lerp(idleAction.getEffectiveWeight(), 1, 0.1));
     }
 
     if (turn !== 0) {
@@ -303,23 +374,22 @@ function updateAvatar(dt) {
     if (mixer) mixer.update(dt);
 
     if (renderer.xr.isPresenting) {
-        // In VR, the camera follows the head, let's keep the debug console in front
-        // Sync dolly to avatar
+        // Sync dolly to avatar. The camera looks down its own -Z, so yawing the
+        // dolly by PI points it along the avatar's +Z forward.
         dolly.position.copy(avatar.position);
-        dolly.rotation.y = avatar.rotation.y + Math.PI; // Face forward (+Z)
-
-        const xrCamera = renderer.xr.getCamera(camera);
-        const headPos = new THREE.Vector3();
-        const headDir = new THREE.Vector3();
-        xrCamera.getWorldPosition(headPos);
-        xrCamera.getWorldDirection(headDir);
-        debugPlane.position.copy(headPos).add(headDir.multiplyScalar(1.5));
-        debugPlane.lookAt(headPos);
+        dolly.rotation.y = avatar.rotation.y + Math.PI;
     } else {
-        // Desktop follow cam
-        const cameraTarget = avatar.position.clone().add(new THREE.Vector3(0, 2, 4));
-        camera.position.lerp(cameraTarget, 0.1);
-        controls.target.lerp(avatar.position.clone().add(new THREE.Vector3(0, 1, 0)), 0.1);
+        // Desktop follow cam: sit behind the avatar's back and above it, so the
+        // camera swings around as the avatar turns instead of staring it down.
+        // Skip the reposition while the user is dragging, so orbiting still works.
+        if (!userIsOrbiting) {
+            cameraTarget.copy(avatar.position).addScaledVector(forward, -followDistance);
+            cameraTarget.y += followHeight;
+            camera.position.lerp(cameraTarget, 0.1);
+        }
+        lookTarget.copy(avatar.position);
+        lookTarget.y += followLookHeight;
+        controls.target.lerp(lookTarget, 0.1);
         controls.update();
     }
 }
@@ -327,6 +397,7 @@ function updateAvatar(dt) {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
     updateAvatar(clock.getDelta());
+    updateDebugPanel();
     renderer.render(scene, camera);
 });
 
