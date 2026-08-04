@@ -208,9 +208,11 @@ plant.position.set(0, 0.95, 0);
 tableGroup.add(plant);
 
 // --- Avatar Loading ---
+// Ready Player Me shut down, so the avatar now comes from a three.js example
+// asset that ships its own Idle/Walk clips. One file means one fetch and no
+// cross-rig retargeting: the clips bind to the skeleton they were authored for.
 const loader = new GLTFLoader();
-const avatarUrl = 'https://models.readyplayer.me/691fe9737b7a88e1f661871f.glb';
-const animUrl = 'https://threejs.org/examples/models/gltf/Michelle.glb';
+const avatarUrl = 'https://threejs.org/examples/models/gltf/Soldier.glb';
 
 let avatar = null;
 let mixer = null;
@@ -218,12 +220,23 @@ let idleAction, walkAction;
 const avatarSpeed = 2.0;
 const avatarTurnSpeed = 2.0;
 
+// Which way the model's front points along its local Z. Flip to -1 if the
+// avatar walks backwards / the camera ends up facing it: this one constant
+// drives locomotion, the follow-cam, and the VR dolly yaw together.
+const avatarForwardZ = 1;
+
 // Desktop follow-cam placement, plus scratch vectors reused each frame.
 const followDistance = 4;
 const followHeight = 2;
 const followLookHeight = 1;
 const cameraTarget = new THREE.Vector3();
 const lookTarget = new THREE.Vector3();
+
+function showLoadError(msg) {
+    console.error(msg);
+    const info = document.getElementById('info');
+    if (info) info.innerHTML = `<p>Could not load the avatar.</p><p>${msg}</p>`;
+}
 
 loader.load(avatarUrl, (gltf) => {
     avatar = gltf.scene;
@@ -236,45 +249,33 @@ loader.load(avatarUrl, (gltf) => {
     scene.add(avatar);
     console.log('Avatar loaded');
 
-    loader.load(animUrl, (animGltf) => {
-        const clips = animGltf.animations || [];
-        if (clips.length === 0) {
-            console.error('Anim error: no clips in ' + animUrl);
-            return;
-        }
+    const clips = gltf.animations || [];
+    if (clips.length === 0) {
+        console.error('No animation clips in ' + avatarUrl);
+        return;
+    }
 
-        mixer = new THREE.AnimationMixer(avatar);
-        const idleClip = clips.find(c => c.name.toLowerCase().includes('idle')) || clips[0];
-        const walkClip = clips.find(c => c.name.toLowerCase().includes('walk'))
-            || (clips.length > 1 ? clips[1] : null);
+    mixer = new THREE.AnimationMixer(avatar);
+    const idleClip = clips.find(c => c.name.toLowerCase().includes('idle')) || clips[0];
+    const walkClip = clips.find(c => c.name.toLowerCase().includes('walk'))
+        || (clips.length > 1 ? clips[1] : null);
 
-        if (idleClip) {
-            idleAction = mixer.clipAction(idleClip);
-            idleAction.play();
-            idleAction.setEffectiveWeight(1);
-        }
+    if (idleClip) {
+        idleAction = mixer.clipAction(idleClip);
+        idleAction.play();
+        idleAction.setEffectiveWeight(1);
+    }
 
-        if (walkClip) {
-            walkAction = mixer.clipAction(walkClip);
-            walkAction.play();
-            walkAction.setEffectiveWeight(0);
-        } else {
-            console.error('No walk clip found; available: ' + clips.map(c => c.name).join(', '));
-        }
+    if (walkClip) {
+        walkAction = mixer.clipAction(walkClip);
+        walkAction.play();
+        walkAction.setEffectiveWeight(0);
+    } else {
+        console.error('No walk clip found; available: ' + clips.map(c => c.name).join(', '));
+    }
 
-        // The animation source and the avatar are different rigs, so tracks bind
-        // by node name. If nothing matched, the mixer runs but moves no bones.
-        const bones = new Set();
-        avatar.traverse(o => bones.add(o.name));
-        const bound = (idleClip || walkClip).tracks
-            .some(t => bones.has(t.name.split('.')[0]));
-        if (!bound) {
-            console.error('Animation tracks match no nodes on the avatar rig');
-        }
-
-        console.log('Animations loaded');
-    }, undefined, (err) => console.error('Anim error:', err));
-}, undefined, (err) => console.error('Avatar error:', err));
+    console.log('Animations loaded: ' + clips.map(c => c.name).join(', '));
+}, undefined, (err) => showLoadError('Avatar error: ' + (err && err.message ? err.message : err)));
 
 // --- Input Handling ---
 const keyState = {};
@@ -355,8 +356,7 @@ function updateAvatar(dt) {
         }
     }
 
-    // The avatar model faces +Z, matching the glTF convention.
-    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(avatar.quaternion);
+    const forward = new THREE.Vector3(0, 0, avatarForwardZ).applyQuaternion(avatar.quaternion);
 
     if (moveForward !== 0) {
         avatar.position.addScaledVector(forward, moveForward * avatarSpeed * dt);
@@ -374,10 +374,10 @@ function updateAvatar(dt) {
     if (mixer) mixer.update(dt);
 
     if (renderer.xr.isPresenting) {
-        // Sync dolly to avatar. The camera looks down its own -Z, so yawing the
-        // dolly by PI points it along the avatar's +Z forward.
+        // Sync dolly to avatar. The camera looks down its own -Z, so a model
+        // facing +Z needs a half turn to point the view the same way it walks.
         dolly.position.copy(avatar.position);
-        dolly.rotation.y = avatar.rotation.y + Math.PI;
+        dolly.rotation.y = avatar.rotation.y + (avatarForwardZ > 0 ? Math.PI : 0);
     } else {
         // Desktop follow cam: sit behind the avatar's back and above it, so the
         // camera swings around as the avatar turns instead of staring it down.
