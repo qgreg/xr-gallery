@@ -118,19 +118,134 @@ lampLight.position.set(1.2, 1.5, -1.2);
 lampLight.castShadow = true;
 scene.add(lampLight);
 
-const windowLight = new THREE.DirectionalLight(0xaaccff, 1);
-windowLight.position.set(-2, 3, 2);
+// Angled so it reads as sun coming through the west window.
+const windowLight = new THREE.DirectionalLight(0xaaccff, 1.4);
+windowLight.position.set(-8, 3.5, 1.5);
 scene.add(windowLight);
 
 // --- Cozy Room Content ---
 const roomGroup = new THREE.Group();
 scene.add(roomGroup);
 
-// 1. Floor (Rug)
+// 0. Room shell
+const ROOM = { width: 12, depth: 12, height: 3 };
+const WINDOW = { width: 2.4, height: 1.5, sill: 1 };
+
+const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xd9d0c5, roughness: 0.95, side: THREE.DoubleSide });
+const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x6b4f3a, roughness: 0.75 });
+const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0xeae6e0, roughness: 1 });
+const trimMaterial = new THREE.MeshStandardMaterial({ color: 0xf2ede6, roughness: 0.8 });
+
+// A wall is a flat shape standing on the floor, optionally with a hole punched
+// through it for the window. ShapeGeometry lays it out in XY at z = 0, facing
+// +Z, so each wall just needs a yaw and a position.
+function createWall(span, height, hole) {
+    const shape = new THREE.Shape();
+    shape.moveTo(-span / 2, 0);
+    shape.lineTo(span / 2, 0);
+    shape.lineTo(span / 2, height);
+    shape.lineTo(-span / 2, height);
+    shape.closePath();
+
+    if (hole) {
+        const cut = new THREE.Path();
+        cut.moveTo(hole.x - hole.width / 2, hole.y);
+        cut.lineTo(hole.x + hole.width / 2, hole.y);
+        cut.lineTo(hole.x + hole.width / 2, hole.y + hole.height);
+        cut.lineTo(hole.x - hole.width / 2, hole.y + hole.height);
+        cut.closePath();
+        shape.holes.push(cut);
+    }
+
+    const wall = new THREE.Mesh(new THREE.ShapeGeometry(shape), wallMaterial);
+    wall.receiveShadow = true;
+    return wall;
+}
+
+const halfW = ROOM.width / 2;
+const halfD = ROOM.depth / 2;
+
+const northWall = createWall(ROOM.width, ROOM.height);
+northWall.position.z = -halfD;
+roomGroup.add(northWall);
+
+const southWall = createWall(ROOM.width, ROOM.height);
+southWall.position.z = halfD;
+southWall.rotation.y = Math.PI;
+roomGroup.add(southWall);
+
+const eastWall = createWall(ROOM.depth, ROOM.height);
+eastWall.position.x = halfW;
+eastWall.rotation.y = -Math.PI / 2;
+roomGroup.add(eastWall);
+
+// The west wall carries the window the directional light shines through.
+const westWall = createWall(ROOM.depth, ROOM.height, {
+    x: 0, y: WINDOW.sill, width: WINDOW.width, height: WINDOW.height
+});
+westWall.position.x = -halfW;
+westWall.rotation.y = Math.PI / 2;
+roomGroup.add(westWall);
+
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.width, ROOM.depth), floorMaterial);
+floor.rotation.x = -Math.PI / 2;
+floor.receiveShadow = true;
+roomGroup.add(floor);
+
+const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.width, ROOM.depth), ceilingMaterial);
+ceiling.rotation.x = Math.PI / 2;
+ceiling.position.y = ROOM.height;
+roomGroup.add(ceiling);
+
+// Baseboards, so the wall/floor seam reads as a joint rather than a crease.
+const baseboardHeight = 0.14;
+const baseboardDepth = 0.04;
+[
+    { size: [ROOM.width, baseboardHeight, baseboardDepth], pos: [0, baseboardHeight / 2, -halfD + baseboardDepth / 2] },
+    { size: [ROOM.width, baseboardHeight, baseboardDepth], pos: [0, baseboardHeight / 2, halfD - baseboardDepth / 2] },
+    { size: [baseboardDepth, baseboardHeight, ROOM.depth], pos: [-halfW + baseboardDepth / 2, baseboardHeight / 2, 0] },
+    { size: [baseboardDepth, baseboardHeight, ROOM.depth], pos: [halfW - baseboardDepth / 2, baseboardHeight / 2, 0] }
+].forEach(({ size, pos }) => {
+    const board = new THREE.Mesh(new THREE.BoxGeometry(...size), trimMaterial);
+    board.position.set(...pos);
+    roomGroup.add(board);
+});
+
+// Window frame and mullions, sitting just inside the opening.
+const windowGroup = new THREE.Group();
+const frameThickness = 0.08;
+const frameDepth = 0.12;
+[
+    { size: [frameDepth, frameThickness, WINDOW.width + frameThickness * 2], pos: [0, WINDOW.height / 2 + frameThickness / 2, 0] },
+    { size: [frameDepth, frameThickness, WINDOW.width + frameThickness * 2], pos: [0, -WINDOW.height / 2 - frameThickness / 2, 0] },
+    { size: [frameDepth, WINDOW.height, frameThickness], pos: [0, 0, WINDOW.width / 2 + frameThickness / 2] },
+    { size: [frameDepth, WINDOW.height, frameThickness], pos: [0, 0, -WINDOW.width / 2 - frameThickness / 2] },
+    { size: [frameDepth * 0.6, WINDOW.height, frameThickness * 0.5], pos: [0, 0, 0] }
+].forEach(({ size, pos }) => {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(...size), trimMaterial);
+    bar.position.set(...pos);
+    windowGroup.add(bar);
+});
+
+// A plain bright panel outside the glass, so the opening reads as daylight
+// rather than a hole onto the clear colour.
+const skyPanel = new THREE.Mesh(
+    new THREE.PlaneGeometry(WINDOW.width, WINDOW.height),
+    new THREE.MeshBasicMaterial({ color: 0xbcd8f5 })
+);
+skyPanel.rotation.y = -Math.PI / 2;
+skyPanel.position.x = -0.1;
+windowGroup.add(skyPanel);
+
+windowGroup.position.set(-halfW, WINDOW.sill + WINDOW.height / 2, 0);
+roomGroup.add(windowGroup);
+
+// 1. Rug — lifted clear of the floor plane to avoid z-fighting.
 const rugGeometry = new THREE.CircleGeometry(4, 32);
 const rugMaterial = new THREE.MeshStandardMaterial({ color: 0x885544, roughness: 0.9 });
 const rug = new THREE.Mesh(rugGeometry, rugMaterial);
 rug.rotation.x = -Math.PI / 2;
+rug.position.y = 0.005;
 rug.receiveShadow = true;
 roomGroup.add(rug);
 
@@ -360,6 +475,11 @@ function updateAvatar(dt) {
 
     if (moveForward !== 0) {
         avatar.position.addScaledVector(forward, moveForward * avatarSpeed * dt);
+        // Keep the avatar inside the shell now that there are walls to hit.
+        const limitX = ROOM.width / 2 - 0.5;
+        const limitZ = ROOM.depth / 2 - 0.5;
+        avatar.position.x = THREE.MathUtils.clamp(avatar.position.x, -limitX, limitX);
+        avatar.position.z = THREE.MathUtils.clamp(avatar.position.z, -limitZ, limitZ);
         if (walkAction) walkAction.setEffectiveWeight(THREE.MathUtils.lerp(walkAction.getEffectiveWeight(), 1, 0.1));
         if (idleAction) idleAction.setEffectiveWeight(THREE.MathUtils.lerp(idleAction.getEffectiveWeight(), 0, 0.1));
     } else {
