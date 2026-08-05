@@ -57,5 +57,36 @@ The dev sandbox proxy blocks `threejs.org`, `models.readyplayer.me`, and
 be fetched for verification from there. Deploys are confirmed via the Actions
 API instead; anything visual has to be checked by hand.
 
-Pages deploys only on push to `main` (`.github/workflows/static.yml`), roughly
-20-30 seconds per run.
+Pages deploys only on push to `main` (`.github/workflows/static.yml`).
+
+## The site is live
+
+**https://qgreg.github.io/xr-gallery/** - first successful deploy was
+`73faddc` on 2026-08-05, all five workflow steps green. WebXR needs HTTPS,
+which Pages provides, so `Enter VR` works from the headset browser.
+
+The site is public. The repo was made public to get there: Pages on a private
+repo needs a paid plan (Pro / Team / Enterprise), and on the free plan the
+`Source` selector does not render at all - Settings -> Pages shows only the
+account-level `Verified domains` panel, which is easy to misread as Pages
+being configured. Flipping the repo back to private will stop Pages serving.
+
+Getting the first deploy took two things, and only the second is discoverable
+from the workflow file:
+
+1. **Pages had never been enabled.** Every run failed at
+   `actions/configure-pages` with `Get Pages site failed ... Not Found`.
+2. **It cannot be enabled from CI.** `enablement: true` on that action fails
+   with `Create Pages site failed. Error: Resource not accessible by
+   integration` - creating a Pages site needs admin rights the workflow
+   `GITHUB_TOKEN` does not have. It has to be set by hand at
+   **Settings -> Pages -> Build and deployment -> Source: GitHub Actions.**
+
+### Testing a deploy
+
+Deploys only run from `main` - either a push, or Actions -> Deploy static
+content to Pages -> Run workflow. A `workflow_dispatch` on a feature branch
+does not work: the `github-pages` environment restricts deployments to the
+default branch, so the job is rejected in about a second with no runner, no
+steps, and no logs to download. That empty failure means "wrong branch", not
+"broken workflow".
