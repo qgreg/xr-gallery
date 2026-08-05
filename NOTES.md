@@ -80,8 +80,8 @@ The dev sandbox proxy blocks `threejs.org`, `models.readyplayer.me`, and
 be fetched for verification from there. Deploys are confirmed via the Actions
 API instead; anything visual has to be checked by hand.
 
-`.claude/launch.json` (repo root, one level above this file) serves the site on
-port 8123 via `python -m http.server` for local preview.
+`.claude/launch.json` serves the site on port 8123 via `python -m http.server`
+for local preview.
 
 Pages deploys only on push to `main` (`.github/workflows/static.yml`), roughly
 20-30 seconds per run.

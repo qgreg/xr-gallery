@@ -1,0 +1,4 @@
+# Local Claude Code config. launch.json defines the preview server used for
+# local development; it points at a machine-local Python and port, so it is a
+# convenience rather than part of the project.
+.claude/
