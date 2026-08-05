@@ -1,5 +1,10 @@
 # Working notes
 
+The scene is a gallery: an 18 x 12 x 4.2m white-cube hall with a freestanding
+partition down the middle, 14 hung works, 3 sculpture plinths, and two benches.
+It was a cozy living room until the gallery conversion; anything below that
+still refers to furniture is stale.
+
 ## Pending: verify in the headset
 
 Nothing in the VR path has been confirmed since the dolly changes. Load the
@@ -22,33 +27,51 @@ Also still unverified in VR:
   `updateAvatar` bails on its first line without one.
 - Dolly reset on exiting VR: the desktop camera should settle behind the avatar
   rather than somewhere offset.
+- Whether the wall labels are legible at a normal viewing distance. They are
+  512x256 canvases on a 0.34m plane; if they read as mush, the fix is a larger
+  plane rather than a larger canvas.
 
 ## Known open issues
 
-- **Follow camera clips through walls.** It sits `followDistance` (4m) behind
-  the avatar with no wall test, so backing into a wall puts the camera outside
-  the room. Fix: shorten the distance when a wall is nearer than 4m.
 - **Assets are hotlinked to `threejs.org`.** Ready Player Me shut down and took
   the avatar with it; the current host is no more of a guarantee. Vendor
   `Soldier.glb` into the repo and switch to a relative path. Requires uploading
   the file manually — the sandbox proxy blocks the download.
 - **In VR you are inside the avatar's head.** No head-hiding or camera offset,
   so the mesh surrounds the camera and casts shadows on you.
-- **Stuck keys on focus loss.** No `blur` handler clears `keyState`, so
-  alt-tabbing while holding W leaves the avatar walking.
-- **`clock.getDelta()` is unclamped.** After a backgrounded tab or a sleeping
-  headset, the first frame's dt can be seconds and teleports the avatar.
+- **The follow camera ignores the partition.** It is clamped to the room's
+  outer bounds, so it no longer escapes the building, but backing up to the
+  partition still puts it through that one wall.
+- **Collision is footprint-only.** `resolveObstacles` handles the partition,
+  plinths and benches; the works themselves are not solid, so you can walk into
+  a canvas hanging on a wall you are already allowed to stand against.
+
+Fixed during the gallery conversion: unclamped `clock.getDelta()`, stuck keys
+on focus loss, and the follow camera leaving the room.
 
 ## Tuning knobs
 
 | What | Where | Notes |
 | --- | --- | --- |
 | Exposure | `main.js` `toneMappingExposure` | Try 0.9 / 1.3 if the room reads washed out or murky |
-| Ambient + bounce | `main.js` `ambientLight`, `bounceLight` | Next dial if shadows land too dark |
-| Room size | `main.js` `ROOM` | 12x12x3 may feel cavernous for "cozy"; 8x8 tightens it |
+| Ambient + bounce | `main.js` `ambientLight`, `bounceLight` | Gallery wants a high floor; drop both together, not one |
+| Track spots | `main.js` `addWallSpot` | Intensity above ~12 blows the wall out to flat white |
+| Room size | `main.js` `ROOM` | 18x12x4.2; the partition constants assume roughly this |
+| The hang | `main.js` `ARTWORKS` | One entry per work: wall, `u` along that wall, size, caption |
+| Real images | `ARTWORKS[].src` | Set it and the procedural canvas is skipped for that entry |
+| Hang height | `main.js` `HANG_HEIGHT` | 1.52m centre line, the museum standard |
 | Avatar facing | `main.js` `avatarForwardZ` | `-1` for Soldier.glb, confirmed visually |
 | Eye height | `?eye=1.6` | Overrides the calibration target |
-| Debug console | `?debug` | In-VR log panel; the only console reachable inside a session |
+| Debug console | `?debug` | In-VR log panel; also exposes `window.gallery` for console poking |
+
+## Hanging a new work
+
+Add an entry to `ARTWORKS`. `wall` is one of `north`, `south`, `east`, `west`,
+`partition-east`, `partition-west`; `u` slides along that wall in metres from
+its centre; `width`/`height` are the visible canvas. Either give it a `style`
+and `palette` from `ART_STYLES` / `PALETTES` for a generated canvas, or a `src`
+pointing at an image. The frame, mat, label and proximity caption follow from
+the entry — nothing else needs touching.
 
 ## Environment constraints
 
@@ -56,6 +79,9 @@ The dev sandbox proxy blocks `threejs.org`, `models.readyplayer.me`, and
 `qgreg.github.io`, so models cannot be downloaded and the deployed page cannot
 be fetched for verification from there. Deploys are confirmed via the Actions
 API instead; anything visual has to be checked by hand.
+
+`.claude/launch.json` (repo root, one level above this file) serves the site on
+port 8123 via `python -m http.server` for local preview.
 
 Pages deploys only on push to `main` (`.github/workflows/static.yml`), roughly
 20-30 seconds per run.
