@@ -32,6 +32,22 @@ Also still unverified in VR:
   the avatar with it; the current host is no more of a guarantee. Vendor
   `Soldier.glb` into the repo and switch to a relative path. Requires uploading
   the file manually — the sandbox proxy blocks the download.
+- **three.js itself is hotlinked to unpkg**, with no integrity hash and no
+  fallback (`index.html`). Worse than the avatar hotlink: a bad or blocked
+  response there renders nothing at all - no room, no error, no VR button -
+  where a missing avatar only degrades to the capsule. Now that the repo is
+  public this is also a supply-chain surface, since whatever that URL serves
+  runs with full page rights. Vendor `three.module.js` plus the four addons.
+- **`npm-publish-github-packages.yml` cannot succeed.** There is no
+  `package.json`, so `npm ci` fails on the first step. It only fires on release
+  creation, so it is dormant until the first release, which it will then fail.
+  Nothing here is an npm package; the workflow looks like a template picked by
+  mistake and should probably just be deleted.
+- **Point light may be too dim for r160 lighting.** `lampLight` is 10 candela
+  with the default `decay = 2`, and r160 defaults `useLegacyLights` to false,
+  so it falls off inverse-square and is faint by ~2m. Try raising it an order
+  of magnitude before reaching for `toneMappingExposure`. Unverified - needs
+  eyes on the deployed page.
 - **In VR you are inside the avatar's head.** No head-hiding or camera offset,
   so the mesh surrounds the camera and casts shadows on you.
 - **Stuck keys on focus loss.** No `blur` handler clears `keyState`, so

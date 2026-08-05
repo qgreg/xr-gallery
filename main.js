@@ -86,6 +86,10 @@ if (DEBUG) {
     const headPos = new THREE.Vector3();
     const headDir = new THREE.Vector3();
     updateDebugPanel = () => {
+        // Hide outside XR. The panel only has a sensible place to be once there
+        // is a head to pin it to; on desktop it would otherwise sit parked in
+        // the middle of the room, which is exactly where you look first.
+        debugPlane.visible = renderer.xr.isPresenting;
         if (!renderer.xr.isPresenting) return;
         const xrCamera = renderer.xr.getCamera(camera);
         xrCamera.getWorldPosition(headPos);
@@ -414,7 +418,9 @@ tableGroup.add(plant);
 // Every mesh in the room receives. Furniture also casts; the shell itself does
 // not, because single-sided planes casting onto themselves produce acne, and
 // the sky panel is unlit by design.
-const shellMeshes = new Set([northWall, southWall, eastWall, westWall, floor, ceiling, skyPanel]);
+// The rug counts as shell too: it is a flat disc 5mm above the floor, so
+// casting onto the plane it lies on buys nothing and produces acne.
+const shellMeshes = new Set([northWall, southWall, eastWall, westWall, floor, ceiling, skyPanel, rug]);
 roomGroup.traverse(obj => {
     if (!obj.isMesh) return;
     obj.receiveShadow = obj !== skyPanel;
@@ -445,6 +451,7 @@ const followHeight = 2;
 const followLookHeight = 1;
 const cameraTarget = new THREE.Vector3();
 const lookTarget = new THREE.Vector3();
+const scratchForward = new THREE.Vector3();
 
 function showLoadError(msg) {
     console.error(msg);
@@ -551,6 +558,15 @@ if (joystickZone) {
     }, { passive: false });
 
     const endJoystick = (e) => {
+        // Only the finger that grabbed the stick can release it. Without the
+        // identifier check, a second finger touching down and lifting inside the
+        // zone recentres the stick while the driving finger is still held.
+        let released = false;
+        for (let i = 0; i < e.changedTouches.length; i++) {
+            if (e.changedTouches[i].identifier === joystickTouchId) released = true;
+        }
+        if (!released) return;
+
         joystickTouchId = null;
         joystickVector.x = 0;
         joystickVector.y = 0;
@@ -636,7 +652,13 @@ function updateAvatar(dt) {
         }
     }
 
-    const forward = new THREE.Vector3(0, 0, avatarForwardZ).applyQuaternion(avatar.quaternion);
+    // Every source above adds into the same two accumulators, so holding a key
+    // while pushing a stick would otherwise walk at double avatarSpeed. Clamp so
+    // the tuning constants mean what they say no matter how many inputs are live.
+    moveForward = THREE.MathUtils.clamp(moveForward, -1, 1);
+    turn = THREE.MathUtils.clamp(turn, -1, 1);
+
+    const forward = scratchForward.set(0, 0, avatarForwardZ).applyQuaternion(avatar.quaternion);
 
     if (moveForward !== 0) {
         avatar.position.addScaledVector(forward, moveForward * avatarSpeed * dt);
